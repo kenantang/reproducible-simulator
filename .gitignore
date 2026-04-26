@@ -1,0 +1,8 @@
+# Provisioned workspace output
+workspace/
+
+# Large validation reference artifact, downloaded separately
+provisioning_assets/preset_validation/reference/*.zip
+
+.DS_Store
+.codex

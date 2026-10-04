@@ -30,11 +30,11 @@ The preset validation project is installed to:
 workspace/data-science-simulator/tidepool_data_science_simulator/projects/presets/
 ```
 
-By default, the preset validation script now runs only the no-noise condition. Other modes can still be requested with `PRESET_NOISE_CONDITIONS`, for example:
+By default, the preset validation script runs all three noise conditions (`nonoise`, `samplenoise`, `fullnoise`) in a loop. A subset can be requested with `PRESET_NOISE_CONDITIONS`, for example:
 
 ```bash
 cd workspace/data-science-simulator/tidepool_data_science_simulator/projects/presets
-PRESET_NOISE_CONDITIONS=samplenoise,fullnoise conda run -n tidepool-data-science-simulator-swift python t1dexi_preset_validation.py
+PRESET_NOISE_CONDITIONS=nonoise conda run -n tidepool-data-science-simulator-swift python t1dexi_preset_validation.py
 ```
 
 The no-noise reference output zip is intentionally not tracked in Git because it is large. Download `t1dexi_preset_validation_reference.zip` from the project shared artifact location and place it here:

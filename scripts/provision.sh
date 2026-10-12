@@ -564,6 +564,7 @@ replace_simulator_library_scripts() {
   log "Replacing simulator library scripts from ${SIMULATOR_LIBRARY_OVERRIDE_DIR}"
   copy_required_file "${SIMULATOR_LIBRARY_OVERRIDE_DIR}/models/patient.py" "${simulator_dir}/tidepool_data_science_simulator/models/patient.py"
   copy_required_file "${SIMULATOR_LIBRARY_OVERRIDE_DIR}/makedata/make_patient.py" "${simulator_dir}/tidepool_data_science_simulator/makedata/make_patient.py"
+  copy_required_file "${SIMULATOR_LIBRARY_OVERRIDE_DIR}/models/swift_controller.py" "${simulator_dir}/tidepool_data_science_simulator/models/swift_controller.py"
   patch_presets_supporting_types "${simulator_dir}"
 }
 
@@ -872,10 +873,6 @@ Pinned checkouts:
 
 Activate with:
   source $(quote_path "${WORKSPACE_DIR}/activate-simulator.sh")
-
-Then try:
-  cd $(quote_path "${simulator_dir}")
-  python tidepool_data_science_simulator/projects/swift_api/swift_loop_example.py
 EOF
 }
 

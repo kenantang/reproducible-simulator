@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import time
+import zlib
 
 import numpy as np
 import pandas as pd
@@ -35,6 +36,9 @@ logging.getLogger().setLevel(logging.ERROR)
 RANDOM_SEED = 42
 PUMP_NOISE_FRACTION = 0.25
 PRESET_EPSILON = 0.00000001
+NO_PRESET = 1.0
+NOISE_CONDITIONS = ['nonoise', 'samplenoise', 'fullnoise']
+PEDIATRIC_AGE_CUTOFF = 18
 DEFAULT_TARGET_MIN = 100
 DEFAULT_TARGET_MAX = 120
 SCHEDULE_HALF_DAY_MINUTES = 720
@@ -83,12 +87,17 @@ def run_simulation_batch(sim_batch, save_dir, num_procs, batch_num):
     return run_simulations(sim_batch, **kwargs)
 
 
-def get_noise(value, percentage=PUMP_NOISE_FRACTION, sample=True):
+def get_noise(value, rng, percentage=PUMP_NOISE_FRACTION, sample=True):
     if sample:
-        return np.random.uniform(-percentage, percentage) * value
+        return rng.uniform(-percentage, percentage) * value
 
-    noise_factor = np.random.choice([1 + percentage, 1 - percentage])
-    return value * noise_factor
+    return rng.choice([percentage, -percentage]) * value
+
+
+def get_noise_rng(experiment_name, sim_name):
+    # Seed per sim so noise does not depend on which other sims ran or were skipped
+    sim_key = zlib.crc32(f"{experiment_name}/{sim_name}".encode())
+    return np.random.default_rng([RANDOM_SEED, sim_key])
 
 
 def build_metabolic_sensitivity_sim(
@@ -99,6 +108,7 @@ def build_metabolic_sensitivity_sim(
     controller=SwiftLoopController,
     add_noise=False,
     sample_noise=False,
+    noise_rng=None,
     use_target=False,
     carb_timeline=None,
     pump_carb_timeline=None,
@@ -122,6 +132,7 @@ def build_metabolic_sensitivity_sim(
     controller: SwiftLoopController or DoNothingController
     add_noise: noise between controller and human metabolism model parameters
     sample_noise: whether to uniformly sample noise
+    noise_rng: numpy Generator used for noise draws (required when add_noise is True)
     use_target: whether to use raised controller target during activity
     new_target_min, new_target_max: controller target range
     carb_timeline, bolus_timeline: patient carb and bolus timeline
@@ -157,9 +168,10 @@ def build_metabolic_sensitivity_sim(
     sensor_config.std_dev = 1.0
 
     if add_noise:
-        pump_basal_rate = basal_rate + get_noise(basal_rate, PUMP_NOISE_FRACTION, sample_noise)
-        pump_cir = cir + get_noise(cir, PUMP_NOISE_FRACTION, sample_noise)
-        pump_isf = isf + get_noise(isf, PUMP_NOISE_FRACTION, sample_noise)
+        assert noise_rng is not None
+        pump_basal_rate = basal_rate + get_noise(basal_rate, noise_rng, PUMP_NOISE_FRACTION, sample_noise)
+        pump_cir = cir + get_noise(cir, noise_rng, PUMP_NOISE_FRACTION, sample_noise)
+        pump_isf = isf + get_noise(isf, noise_rng, PUMP_NOISE_FRACTION, sample_noise)
     else:
         pump_basal_rate, pump_cir, pump_isf = basal_rate, cir, isf
 
@@ -278,17 +290,19 @@ if __name__ == "__main__":
     # Grid search parameters
     sim_conditions = env_list('PRESET_SIM_CONDITIONS', ['preset+target'])
     starting_glucoses = env_list('PRESET_STARTING_GLUCOSES', np.arange(70, 270, 20).tolist(), int)
-    netIoBs = env_list('PRESET_NET_IOBS', [0], float)
+    netIoBs = env_list('PRESET_NET_IOBS', [0, 1, 2, 3], float)
     pa_durations = env_list('PRESET_PA_DURATIONS', [30, 60], int)
     activities = env_list('PRESET_ACTIVITIES', ['walking', 'biking', 'jogging', 'strength training'])
 
-    presets = env_list('PRESET_VALUES', [0.23, 0.22, 0.21, 0.39], float)
     targets = env_targets('PRESET_TARGETS', [
         (100, 120),
         (150, 170)
     ])
-    num_virtual_patients = env_int('PRESET_NUM_VIRTUAL_PATIENTS', 72)
-    noise_conditions = env_list('PRESET_NOISE_CONDITIONS', ['nonoise'])
+    num_virtual_patients = env_int('PRESET_NUM_VIRTUAL_PATIENTS', None)
+    noise_conditions = env_list('PRESET_NOISE_CONDITIONS', NOISE_CONDITIONS)
+    unknown_noise_conditions = set(noise_conditions) - set(NOISE_CONDITIONS)
+    if unknown_noise_conditions:
+        raise ValueError(f"PRESET_NOISE_CONDITIONS has unknown values {sorted(unknown_noise_conditions)}; expected some of {NOISE_CONDITIONS}")
     batch_size = env_int('PRESET_BATCH_SIZE', 144)
     num_procs = env_int('PRESET_NUM_PROCS', 48)
 
@@ -302,8 +316,8 @@ if __name__ == "__main__":
     # Virtual patient inputs
     vp_info_path = os.environ.get('PRESET_VP_INFO_PATH', os.path.join(SCRIPT_DIR, 'tidepool_helmsley_preset_virtual_patients.csv'))
     vp_info = pd.read_csv(vp_info_path)
-    vp_info = vp_info[vp_info['age'] >= 18] # select adult virtual patients
-    vp_info = vp_info.head(num_virtual_patients)
+    if num_virtual_patients is not None:
+        vp_info = vp_info.head(num_virtual_patients)
     print(f'vp info: {vp_info}')
 
     # Metabolism model parameters
@@ -313,6 +327,7 @@ if __name__ == "__main__":
     n_vals = metabolism_model_params['n_vals']
     tau_vals = metabolism_model_params['tau_vals']
     hr_vals = metabolism_model_params['hr_vals']
+    peds_hr_vals = metabolism_model_params['peds_hr_vals']
 
     # Default simulation start time
     t0 = DATETIME_DEFAULT
@@ -341,6 +356,8 @@ if __name__ == "__main__":
                 sample_noise = True
             elif noise_condition == 'fullnoise':
                 add_noise = True
+            elif noise_condition != 'nonoise':
+                raise ValueError(f"Unknown noise condition: {noise_condition}")
 
             if use_controller:
                 experiment_name = 'controller'
@@ -376,15 +393,11 @@ if __name__ == "__main__":
                 a = a_vals[activity]
                 n = n_vals[activity]
                 tau = tau_vals[activity]
-                hr = hr_vals[activity]
 
                 for starting_glucose in starting_glucoses:
                     for netIoB in netIoBs:
                         for pa_duration in pa_durations:
-                            for preset in presets:
-                                if preset_by_activity[activity] != preset:
-                                    print(f"SKIPPING {activity} with preset {preset}")
-                                    continue
+                            for preset in [preset_by_activity[activity], NO_PRESET]:
                                 start_time = time.time()
                                 sims = {}
                                 for target in targets:
@@ -393,9 +406,13 @@ if __name__ == "__main__":
                                         isf = vp['isf']
                                         cir = vp['cir']
                                         egp = vp['basal_rate']
+                                        if vp['age'] < PEDIATRIC_AGE_CUTOFF:
+                                            hr = peds_hr_vals[activity]
+                                        else:
+                                            hr = hr_vals[activity]
 
                                         if not use_preset:
-                                            preset = 1.0
+                                            preset = NO_PRESET
                                         if use_controller:
                                             controller = SwiftLoopController
                                         else:
@@ -425,6 +442,7 @@ if __name__ == "__main__":
                                             controller=controller,
                                             add_noise=add_noise,
                                             sample_noise=sample_noise,
+                                            noise_rng=get_noise_rng(experiment_name, sim_name),
                                             use_target=use_target,
                                             carb_timeline=carb_timeline,
                                             pump_carb_timeline=pump_carb_timeline,

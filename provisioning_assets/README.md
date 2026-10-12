@@ -30,7 +30,7 @@ preset_validation/
 workspace/data-science-simulator/tidepool_data_science_simulator/projects/presets/
 ```
 
-The preset script defaults to the no-noise condition. Set `PRESET_NOISE_CONDITIONS=samplenoise,fullnoise` or another comma-separated list to run other modes explicitly.
+The preset script runs all three noise conditions (`nonoise`, `samplenoise`, `fullnoise`) by default. Set `PRESET_NOISE_CONDITIONS` to a comma-separated subset (for example `PRESET_NOISE_CONDITIONS=nonoise`) to run only some of them.
 
 ## Reference Zip
 

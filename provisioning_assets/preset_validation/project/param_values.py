@@ -4,5 +4,6 @@ metabolism_model_params = {
         "a_vals": {"walking": -0.0020, "biking": -0.0020, "jogging": -0.0020, "strength training": 0.0007},
         "n_vals": {"walking": 27, "biking": 27, "jogging": 27, "strength training": 24},
         "tau_vals": {"walking": -0.998, "biking": -0.998, "jogging": -0.998, "strength training": -0.992},
-        "hr_vals": {'walking': 112, 'biking': 124, 'jogging': 152, 'strength training': 105}
+        "hr_vals": {'walking': 112, 'biking': 124, 'jogging': 152, 'strength training': 105},
+        "peds_hr_vals": {'walking': 108, 'biking': 109, 'jogging': 119, 'strength training': 105}
         }

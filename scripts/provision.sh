@@ -744,7 +744,7 @@ create_or_update_conda_env() {
     (cd "${sim_dir}" && "${conda_bin}" env update "${solver_args[@]}" -n "${CONDA_ENV_NAME}" -f "${env_file}" --prune)
   else
     log "Creating conda environment ${CONDA_ENV_NAME}"
-    (cd "${sim_dir}" && "${conda_bin}" env create "${solver_args[@]}" -f "${env_file}")
+    (cd "${sim_dir}" && "${conda_bin}" env create "${solver_args[@]}" -n "${CONDA_ENV_NAME}" -f "${env_file}")
   fi
 
   log "Installing simulator checkout editable into ${CONDA_ENV_NAME}"

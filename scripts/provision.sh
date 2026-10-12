@@ -5,14 +5,14 @@ DATA_SCIENCE_SIMULATOR_REPO="https://github.com/tidepool-org/data-science-simula
 DATA_SCIENCE_SIMULATOR_COMMIT="2f486457c36a96331571bf355324d19cc99a900f"
 
 LOOP_ALGORITHM_TO_PYTHON_REPO="https://github.com/tidepool-org/LoopAlgorithmToPython.git"
-LOOP_ALGORITHM_TO_PYTHON_COMMIT="99ee8097dfb5e26cdc5a2593a74390570a0ae77f"
+LOOP_ALGORITHM_TO_PYTHON_COMMIT="d555ca707dab46b42c9485a3925e263bb09e021a"
 
-LOOP_ALGORITHM_REPO="https://github.com/kenantang/LoopAlgorithm.git"
-LOOP_ALGORITHM_COMMIT="a64903188ecbb9df1be198dfe010cdd40eb86727"
+LOOP_ALGORITHM_REPO="https://github.com/tidepool-org/LoopAlgorithm.git"
+LOOP_ALGORITHM_COMMIT="ab55554f72ac191a3698392b447f72117c02cc2d"
 
 CONDA_ENV_NAME="${CONDA_ENV_NAME:-tidepool-data-science-simulator-swift}"
 CONDA_SOLVER="${CONDA_SOLVER:-libmamba}"
-SWIFT_VERSION="${SWIFT_VERSION:-5.10.1}"
+SWIFT_VERSION="${SWIFT_VERSION:-6.0.3}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPRO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd -P)"
@@ -23,6 +23,7 @@ PROVISIONING_ASSETS_DIR="${REPRO_ROOT}/provisioning_assets"
 SIMULATOR_LIBRARY_OVERRIDE_DIR="${PROVISIONING_ASSETS_DIR}/library_overrides/data-science-simulator/tidepool_data_science_simulator"
 CONDA_LIBRARY_OVERRIDE_DIR="${PROVISIONING_ASSETS_DIR}/library_overrides/tidepool-data-science-models/tidepool_data_science_models"
 PRESET_PROJECT_ASSETS_DIR="${PROVISIONING_ASSETS_DIR}/preset_validation/project"
+PATCHES_DIR="${PROVISIONING_ASSETS_DIR}/patches"
 
 CREATE_CONDA_ENV=1
 BUILD_SWIFT_BRIDGE=1
@@ -132,7 +133,7 @@ parse_args() {
 
 swift_version_is_supported() {
   case "$1" in
-    5.10*|5.11*|6.*) return 0 ;;
+    6.*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -283,6 +284,8 @@ install_swift_linux() {
 ensure_swift() {
   local version
 
+  drop_stale_workspace_swift_link
+
   if have swift; then
     version="$(detect_swift_version || true)"
     if [ -n "${version}" ] && swift_version_is_supported "${version}"; then
@@ -291,15 +294,32 @@ ensure_swift() {
       return 0
     fi
 
-    printf 'Found Swift at %s, but version "%s" may not satisfy Package.swift tools 5.10.\n' "$(command -v swift)" "${version:-unknown}" >&2
+    printf 'Found Swift at %s, but version "%s" may not satisfy Package.swift tools 6.0.\n' "$(command -v swift)" "${version:-unknown}" >&2
   fi
 
   install_swift_linux
 
   version="$(detect_swift_version || true)"
   [ -n "${version}" ] || die "Swift installation completed, but swift --version did not report a version"
-  swift_version_is_supported "${version}" || die "Swift ${version} is too old; need Swift 5.10 or newer"
+  swift_version_is_supported "${version}" || die "Swift ${version} is too old; need Swift 6.0 or newer"
   log "Using Swift ${version} at $(command -v swift)"
+}
+
+# The activation helper and smoke test put ${TOOLS_DIR}/swift first on PATH and
+# LD_LIBRARY_PATH. If that link still points at an older toolchain (e.g. 5.10.1
+# from before the LoopAlgorithm upgrade) while the bridge was built with a newer
+# Swift found elsewhere, the library would load a mismatched Swift runtime.
+drop_stale_workspace_swift_link() {
+  local swift_link version
+  swift_link="${TOOLS_DIR}/swift"
+
+  [ -L "${swift_link}" ] || return 0
+  [ -x "${swift_link}/usr/bin/swift" ] || return 0
+  version="$("${swift_link}/usr/bin/swift" --version 2>/dev/null | sed -n 's/.*Swift version \([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+  swift_version_is_supported "${version}" && return 0
+
+  log "Unlinking unsupported workspace Swift ${version:-unknown} at ${swift_link}"
+  rm "${swift_link}"
 }
 
 clone_at_commit() {
@@ -316,6 +336,14 @@ clone_at_commit() {
   if [ ! -d "${path}/.git" ]; then
     log "Cloning ${name}"
     git clone "${repo_url}" "${path}"
+  fi
+
+  git -C "${path}" remote set-url origin "${repo_url}"
+
+  # Provisioning patches checkouts in place, so an existing checkout of an older
+  # pin is dirty with those patches and cannot be moved to the new commit.
+  if [ "$(git -C "${path}" rev-parse HEAD)" != "${commit}" ] && [ -n "$(git -C "${path}" status --porcelain)" ]; then
+    die "${path} has local changes and is not at the pinned commit ${commit}. Remove it (rm -rf $(quote_path "${path}")) to re-clone, or rerun with a fresh --workspace."
   fi
 
   log "Checking out ${name} at ${commit}"
@@ -536,6 +564,7 @@ replace_simulator_library_scripts() {
   log "Replacing simulator library scripts from ${SIMULATOR_LIBRARY_OVERRIDE_DIR}"
   copy_required_file "${SIMULATOR_LIBRARY_OVERRIDE_DIR}/models/patient.py" "${simulator_dir}/tidepool_data_science_simulator/models/patient.py"
   copy_required_file "${SIMULATOR_LIBRARY_OVERRIDE_DIR}/makedata/make_patient.py" "${simulator_dir}/tidepool_data_science_simulator/makedata/make_patient.py"
+  copy_required_file "${SIMULATOR_LIBRARY_OVERRIDE_DIR}/models/swift_controller.py" "${simulator_dir}/tidepool_data_science_simulator/models/swift_controller.py"
   patch_presets_supporting_types "${simulator_dir}"
 }
 
@@ -569,391 +598,31 @@ copy_preset_project_assets() {
   copy_asset_file "${PRESET_PROJECT_ASSETS_DIR}/param_values.py" "${presets_dir}/param_values.py"
 }
 
-patch_loop_algorithm_package_for_linux_healthkit() {
-  local package_file tmp_file
-  package_file="$1"
+apply_patch_once() {
+  local repo_dir patch_file
+  repo_dir="$1"
+  patch_file="$2"
 
-  grep -q 'name: "HealthKit"' "${package_file}" && return 0
+  [ -f "${patch_file}" ] || die "missing patch file: ${patch_file}"
 
-  tmp_file="$(mktemp)"
-  awk '
-    /products: \[/ {
-      in_products = 1
-      print
-      next
-    }
-    in_products && /targets: \["LoopAlgorithm"\]\),/ {
-      print
-      print "        .library(name: \"HealthKit\", targets: [\"HealthKit\"]),"
-      next
-    }
-    /targets: \[/ {
-      in_targets = 1
-      print
-      next
-    }
-    in_targets && /        \.target\(/ {
-      target_candidate = 1
-      print
-      next
-    }
-    target_candidate && /name: "LoopAlgorithm"/ {
-      print "            name: \"LoopAlgorithm\","
-      print "            dependencies: [\"HealthKit\"]"
-      target_candidate = 0
-      target_patched = 1
-      next
-    }
-    target_patched && /        \),/ {
-      print
-      print "        .target("
-      print "            name: \"HealthKit\""
-      print "        ),"
-      target_patched = 0
-      next
-    }
-    {
-      target_candidate = 0
-      print
-    }
-  ' "${package_file}" > "${tmp_file}"
-  mv "${tmp_file}" "${package_file}"
-}
-
-patch_bridge_package_for_linux_healthkit() {
-  local package_file tmp_file
-  package_file="$1"
-
-  grep -q 'product(name: "HealthKit"' "${package_file}" && return 0
-
-  tmp_file="$(mktemp)"
-  awk '
-    /dependencies: \["LoopAlgorithm"\]/ {
-      print "            dependencies: ["
-      print "                \"LoopAlgorithm\","
-      print "                .product(name: \"HealthKit\", package: \"LoopAlgorithm\")"
-      print "            ]"
-      next
-    }
-    { print }
-  ' "${package_file}" > "${tmp_file}"
-  mv "${tmp_file}" "${package_file}"
-}
-
-patch_bridge_linux_foundation_compat() {
-  local bridge_dir source_file tmp_file
-  bridge_dir="$1"
-  source_file="${bridge_dir}/Sources/LoopAlgorithmToPython/LoopAlgorithmToPython.swift"
-
-  if ! grep -q 'LoopAlgorithmToPythonLinuxDateCompatibility' "${source_file}"; then
-    tmp_file="$(mktemp)"
-    awk '
-      /^import HealthKit$/ {
-        print
-        print ""
-        print "#if os(Linux)"
-        print "import Glibc"
-        print ""
-        print "private enum LoopAlgorithmToPythonLinuxDateCompatibility { }"
-        print ""
-        print "extension Date {"
-        print "    func ISO8601Format() -> String {"
-        print "        ISO8601DateFormatter().string(from: self)"
-        print "    }"
-        print "}"
-        print "#endif"
-        next
-      }
-      { print }
-    ' "${source_file}" > "${tmp_file}"
-    mv "${tmp_file}" "${source_file}"
+  if git -C "${repo_dir}" apply --reverse --check "${patch_file}" >/dev/null 2>&1; then
+    return 0
   fi
 
-  grep -q 'canImport(ObjectiveC)' "${source_file}" && return 0
-
-  tmp_file="$(mktemp)"
-  awk '
-    /^func handleException\(exception: NSException\)/ {
-      print "#if canImport(ObjectiveC)"
-      print "func handleException(exception: NSException) {"
-      print "    print(\"Uncaught exception: \\(exception.description)\")"
-      print "    print(\"Stack trace: \\(exception.callStackSymbols)\")"
-      print "}"
-      print ""
-      print "@_cdecl(\"initializeExceptionHandler\")"
-      print "public func initializeExceptionHandler() {"
-      print "    NSSetUncaughtExceptionHandler(handleException)"
-      print "}"
-      print "#else"
-      print "@_cdecl(\"initializeExceptionHandler\")"
-      print "public func initializeExceptionHandler() {"
-      print "}"
-      print "#endif"
-      skip = 1
-      close_count = 0
-      next
-    }
-    skip {
-      if ($0 == "}") {
-        close_count++
-        if (close_count == 2) {
-          skip = 0
-        }
-      }
-      next
-    }
-    { print }
-  ' "${source_file}" > "${tmp_file}"
-  mv "${tmp_file}" "${source_file}"
+  log "Applying $(basename "${patch_file}")"
+  git -C "${repo_dir}" apply "${patch_file}" || die "$(basename "${patch_file}") no longer applies to ${repo_dir}; update it for the pinned commit"
 }
 
-patch_linux_coredata_import() {
-  local loop_algorithm_dir source_file tmp_file
-  loop_algorithm_dir="$1"
-  source_file="${loop_algorithm_dir}/Sources/LoopAlgorithm/Carbs/FixtureCarbEntry.swift"
-
-  grep -q 'import CoreData' "${source_file}" || return 0
-  grep -q 'canImport(CoreData)' "${source_file}" && return 0
-
-  tmp_file="$(mktemp)"
-  awk '
-    /^import CoreData$/ {
-      print "#if canImport(CoreData)"
-      print "import CoreData"
-      print "#endif"
-      next
-    }
-    { print }
-  ' "${source_file}" > "${tmp_file}"
-  mv "${tmp_file}" "${source_file}"
-}
-
-patch_linux_hkquantity_comparable_extension() {
-  local loop_algorithm_dir source_file tmp_file
-  loop_algorithm_dir="$1"
-  source_file="${loop_algorithm_dir}/Sources/LoopAlgorithm/Extensions/HKQuantity.swift"
-
-  grep -q 'extension HKQuantity: @retroactive Comparable' "${source_file}" || return 0
-
-  tmp_file="$(mktemp)"
-  awk '
-    /extension HKQuantity: @retroactive Comparable/ {
-      print "extension HKQuantity: Comparable { }"
-      next
-    }
-    { print }
-  ' "${source_file}" > "${tmp_file}"
-  mv "${tmp_file}" "${source_file}"
-}
-
-write_linux_healthkit_shim() {
-  local loop_algorithm_dir shim_dir shim_file
-  loop_algorithm_dir="$1"
-  shim_dir="${loop_algorithm_dir}/Sources/HealthKit"
-  shim_file="${shim_dir}/HealthKit.swift"
-
-  mkdir -p "${shim_dir}"
-  cat > "${shim_file}" <<'SWIFT'
-@_exported import Foundation
-
-public enum HKMetricPrefix {
-    case pico
-    case nano
-    case micro
-    case milli
-    case centi
-    case deci
-    case deca
-    case hecto
-    case kilo
-    case mega
-    case giga
-
-    fileprivate var multiplier: Double {
-        switch self {
-        case .pico: return 1e-12
-        case .nano: return 1e-9
-        case .micro: return 1e-6
-        case .milli: return 1e-3
-        case .centi: return 1e-2
-        case .deci: return 1e-1
-        case .deca: return 1e1
-        case .hecto: return 1e2
-        case .kilo: return 1e3
-        case .mega: return 1e6
-        case .giga: return 1e9
-        }
-    }
-
-    fileprivate var symbol: String {
-        switch self {
-        case .pico: return "p"
-        case .nano: return "n"
-        case .micro: return "u"
-        case .milli: return "m"
-        case .centi: return "c"
-        case .deci: return "d"
-        case .deca: return "da"
-        case .hecto: return "h"
-        case .kilo: return "k"
-        case .mega: return "M"
-        case .giga: return "G"
-        }
-    }
-}
-
-public struct HKUnit: Equatable, Hashable, Sendable {
-    public let unitString: String
-    fileprivate let scale: Double
-    fileprivate let dimensions: [String: Int]
-
-    fileprivate init(unitString: String, scale: Double, dimensions: [String: Int]) {
-        self.unitString = unitString
-        self.scale = scale
-        self.dimensions = dimensions.filter { $0.value != 0 }
-    }
-
-    public init(from string: String) {
-        switch string {
-        case "g":
-            self = .gram()
-        case "mg":
-            self = .gramUnit(with: .milli)
-        case "L":
-            self = .literUnit(with: nil)
-        case "dL":
-            self = .literUnit(with: .deci)
-        case "mg/dL":
-            self = .gramUnit(with: .milli).unitDivided(by: .literUnit(with: .deci))
-        case "mg/dL/s", "mg/dL/sec", "mg/dL·s":
-            self = .gramUnit(with: .milli).unitDivided(by: .literUnit(with: .deci)).unitDivided(by: .second())
-        case "mg/dL/min":
-            self = .gramUnit(with: .milli).unitDivided(by: .literUnit(with: .deci)).unitDivided(by: .minute())
-        case "s", "sec":
-            self = .second()
-        case "min":
-            self = .minute()
-        case "h", "hr":
-            self = .hour()
-        case "%":
-            self = .percent()
-        case "U", "IU":
-            self = .internationalUnit()
-        default:
-            self = HKUnit(unitString: string, scale: 1, dimensions: [string: 1])
-        }
-    }
-
-    public static func gram() -> HKUnit {
-        HKUnit(unitString: "g", scale: 1, dimensions: ["mass": 1])
-    }
-
-    public static func gramUnit(with prefix: HKMetricPrefix) -> HKUnit {
-        HKUnit(unitString: "\(prefix.symbol)g", scale: prefix.multiplier, dimensions: ["mass": 1])
-    }
-
-    public static func literUnit(with prefix: HKMetricPrefix?) -> HKUnit {
-        let symbol = prefix.map { "\($0.symbol)L" } ?? "L"
-        let scale = prefix?.multiplier ?? 1
-        return HKUnit(unitString: symbol, scale: scale, dimensions: ["volume": 1])
-    }
-
-    public static func second() -> HKUnit {
-        HKUnit(unitString: "s", scale: 1, dimensions: ["time": 1])
-    }
-
-    public static func minute() -> HKUnit {
-        HKUnit(unitString: "min", scale: 60, dimensions: ["time": 1])
-    }
-
-    public static func hour() -> HKUnit {
-        HKUnit(unitString: "h", scale: 3600, dimensions: ["time": 1])
-    }
-
-    public static func percent() -> HKUnit {
-        HKUnit(unitString: "%", scale: 1, dimensions: ["percent": 1])
-    }
-
-    public static func internationalUnit() -> HKUnit {
-        HKUnit(unitString: "U", scale: 1, dimensions: ["insulin": 1])
-    }
-
-    public func unitDivided(by other: HKUnit) -> HKUnit {
-        combine(with: other, operation: -1, separator: "/")
-    }
-
-    public func unitMultiplied(by other: HKUnit) -> HKUnit {
-        combine(with: other, operation: 1, separator: "*")
-    }
-
-    private func combine(with other: HKUnit, operation: Int, separator: String) -> HKUnit {
-        var combined = dimensions
-        for (key, exponent) in other.dimensions {
-            combined[key, default: 0] += operation * exponent
-        }
-
-        let combinedString = "\(unitString)\(separator)\(other.unitString)"
-        let combinedScale = operation == 1 ? scale * other.scale : scale / other.scale
-        return HKUnit(unitString: combinedString, scale: combinedScale, dimensions: combined)
-    }
-}
-
-public struct HKQuantity: Sendable {
-    private let baseValue: Double
-    public let unit: HKUnit
-
-    public init(unit: HKUnit, doubleValue: Double) {
-        self.unit = unit
-        self.baseValue = doubleValue * unit.scale
-    }
-
-    public func doubleValue(for unit: HKUnit) -> Double {
-        baseValue / unit.scale
-    }
-
-    public func compare(_ quantity: HKQuantity) -> ComparisonResult {
-        if baseValue < quantity.baseValue {
-            return .orderedAscending
-        } else if baseValue > quantity.baseValue {
-            return .orderedDescending
-        } else {
-            return .orderedSame
-        }
-    }
-
-    public static func == (lhs: HKQuantity, rhs: HKQuantity) -> Bool {
-        lhs.compare(rhs) == .orderedSame
-    }
-}
-
-open class HKQuantitySample {
-    public let startDate: Date
-    public let endDate: Date
-    public let quantity: HKQuantity
-
-    public init(startDate: Date, endDate: Date, quantity: HKQuantity) {
-        self.startDate = startDate
-        self.endDate = endDate
-        self.quantity = quantity
-    }
-}
-SWIFT
-}
-
-patch_linux_healthkit_shim() {
+patch_swift_sources() {
   local loop_algorithm_dir bridge_dir
   loop_algorithm_dir="$1"
   bridge_dir="$2"
 
-  [ "$(uname -s)" = "Linux" ] || return 0
+  apply_patch_once "${bridge_dir}" "${PATCHES_DIR}/LoopAlgorithmToPython-loop-quantity-port.patch"
 
-  log "Adding Linux HealthKit compatibility shim"
-  write_linux_healthkit_shim "${loop_algorithm_dir}"
-  patch_loop_algorithm_package_for_linux_healthkit "${loop_algorithm_dir}/Package.swift"
-  patch_bridge_package_for_linux_healthkit "${bridge_dir}/Package.swift"
-  patch_bridge_linux_foundation_compat "${bridge_dir}"
-  patch_linux_coredata_import "${loop_algorithm_dir}"
-  patch_linux_hkquantity_comparable_extension "${loop_algorithm_dir}"
+  if [ "$(uname -s)" = "Linux" ]; then
+    apply_patch_once "${loop_algorithm_dir}" "${PATCHES_DIR}/LoopAlgorithm-linux-swift5-language-mode.patch"
+  fi
 }
 
 build_swift_bridge() {
@@ -963,7 +632,7 @@ build_swift_bridge() {
 
   ensure_swift
   patch_loop_algorithm_dependency "${bridge_dir}"
-  patch_linux_healthkit_shim "${loop_algorithm_dir}" "${bridge_dir}"
+  patch_swift_sources "${loop_algorithm_dir}" "${bridge_dir}"
 
   log "Building LoopAlgorithmToPython dynamic library"
   (
@@ -1204,10 +873,6 @@ Pinned checkouts:
 
 Activate with:
   source $(quote_path "${WORKSPACE_DIR}/activate-simulator.sh")
-
-Then try:
-  cd $(quote_path "${simulator_dir}")
-  python tidepool_data_science_simulator/projects/swift_api/swift_loop_example.py
 EOF
 }
 

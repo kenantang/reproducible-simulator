@@ -216,6 +216,9 @@ def build_metabolic_sensitivity_sim(
             duration_minutes=[SCHEDULE_HALF_DAY_MINUTES, target_duration, remaining_time]
         )
         pump_config.target_range_schedule = target_range_schedule
+        target_start = datetime.datetime.combine(t0.date(), datetime.time(hour=12))
+        target_end = datetime.datetime.combine(t0.date(), target_end_time)
+        pump_config.target_override = (target_start, target_end, new_target_min, new_target_max)
     else:
         target_range_schedule = TargetRangeSchedule24hr(
             t0,
@@ -290,7 +293,8 @@ if __name__ == "__main__":
     # Grid search parameters
     sim_conditions = env_list('PRESET_SIM_CONDITIONS', ['preset+target'])
     starting_glucoses = env_list('PRESET_STARTING_GLUCOSES', np.arange(70, 270, 20).tolist(), int)
-    netIoBs = env_list('PRESET_NET_IOBS', [0, 1, 2, 3], float)
+    # Whole numbers parse as ints so names print like the default ints ("0", not "0.0").
+    netIoBs = env_list('PRESET_NET_IOBS', [0, 1, 2, 3], lambda value: int(float(value)) if float(value).is_integer() else float(value))
     pa_durations = env_list('PRESET_PA_DURATIONS', [30, 60], int)
     activities = env_list('PRESET_ACTIVITIES', ['walking', 'biking', 'jogging', 'strength training'])
 
@@ -419,6 +423,8 @@ if __name__ == "__main__":
                                             controller = DoNothingController
 
                                         sim_name = f"{activity}_{starting_glucose}_{netIoB}_{pa_duration}_{preset}_{target}_{vp_index}"
+                                        # Noise is seeded with netIoB floored to whole units, matching earlier integer-IOB runs
+                                        seed_name = f"{activity}_{starting_glucose}_{math.floor(netIoB)}_{pa_duration}_{preset}_{target}_{vp_index}"
                                         savefilename = os.path.join(save_root, f"{sim_name}.tsv")
 
                                         if os.path.isfile(savefilename):
@@ -442,7 +448,7 @@ if __name__ == "__main__":
                                             controller=controller,
                                             add_noise=add_noise,
                                             sample_noise=sample_noise,
-                                            noise_rng=get_noise_rng(experiment_name, sim_name),
+                                            noise_rng=get_noise_rng(experiment_name, seed_name),
                                             use_target=use_target,
                                             carb_timeline=carb_timeline,
                                             pump_carb_timeline=pump_carb_timeline,

@@ -15,10 +15,14 @@ The script clones these repositories as siblings under `workspace/` and checks o
 | Repository | Commit |
 | --- | --- |
 | `https://github.com/tidepool-org/data-science-simulator.git` | `2f486457c36a96331571bf355324d19cc99a900f` |
-| `https://github.com/tidepool-org/LoopAlgorithmToPython.git` | `99ee8097dfb5e26cdc5a2593a74390570a0ae77f` |
-| `https://github.com/kenantang/LoopAlgorithm.git` | `a64903188ecbb9df1be198dfe010cdd40eb86727` |
+| `https://github.com/tidepool-org/LoopAlgorithmToPython.git` | `d555ca707dab46b42c9485a3925e263bb09e021a` |
+| `https://github.com/tidepool-org/LoopAlgorithm.git` | `ab55554f72ac191a3698392b447f72117c02cc2d` |
 
-It then points `LoopAlgorithmToPython` at the local pinned `LoopAlgorithm` checkout, builds the Swift dynamic library, and creates/updates the `tidepool-data-science-simulator-swift` conda environment from the simulator repo's `conda-environment-swift.yml`.
+It then points `LoopAlgorithmToPython` at the local pinned `LoopAlgorithm` checkout, applies the patches in `provisioning_assets/patches/`, builds the Swift dynamic library, and creates/updates the `tidepool-data-science-simulator-swift` conda environment from the simulator repo's `conda-environment-swift.yml`.
+
+Upstream `LoopAlgorithmToPython` still targets the older HealthKit-based `LoopAlgorithm` API, so `LoopAlgorithmToPython-loop-quantity-port.patch` ports it to `LoopQuantity`/`LoopUnit`. Each patch file starts with a note explaining why it is needed. If a pin is bumped and a patch no longer applies, provisioning stops with an error naming the patch.
+
+Upgrading from an older provisioned workspace: the existing `workspace/LoopAlgorithm` and `workspace/LoopAlgorithmToPython` checkouts contain the previous pins' patches, so provisioning refuses to move them. Remove those two directories and rerun the script.
 
 ## Local Provisioning Assets
 
@@ -66,7 +70,7 @@ To compare generated no-noise outputs against the local reference zip:
 
 ## Linux Notes
 
-If `swift` is not already installed, the script installs Swift `5.10.1` locally under `workspace/.toolchains/` on Ubuntu 20.04 or 22.04 x86_64. If the Swift build reports missing OS libraries, rerun with:
+`LoopAlgorithm` requires Swift 6. If a Swift 6 toolchain is not already installed, the script installs Swift `6.0.3` locally under `workspace/.toolchains/` on Ubuntu 20.04 or 22.04 x86_64. On Linux, `LoopAlgorithm` is built in Swift 5 language mode (see `LoopAlgorithm-linux-swift5-language-mode.patch`) because its `DispatchQueue.concurrentPerform` code only passes Swift 6 strict concurrency checks against Darwin's Dispatch. If the Swift build reports missing OS libraries, rerun with:
 
 ```bash
 INSTALL_SYSTEM_DEPS=1 ./scripts/provision.sh

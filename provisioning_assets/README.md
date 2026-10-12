@@ -10,6 +10,7 @@ library_overrides/
     tidepool_data_science_simulator/
       makedata/make_patient.py
       models/patient.py
+      models/swift_controller.py
   tidepool-data-science-models/
     tidepool_data_science_models/
       models/simple_metabolism_model.py
@@ -29,6 +30,8 @@ preset_validation/
 ```text
 workspace/data-science-simulator/tidepool_data_science_simulator/projects/presets/
 ```
+
+`models/swift_controller.py` supports an optional `pump_config.target_override` of `(start, end, lower, upper)`. While a decision time falls in `[start, end)`, the controller sends Loop that range as the only target segment, so the whole forecast is corrected to the override target instead of each forecast point's scheduled target. The preset script sets it for the raised activity target.
 
 The preset script runs all three noise conditions (`nonoise`, `samplenoise`, `fullnoise`) by default. Set `PRESET_NOISE_CONDITIONS` to a comma-separated subset (for example `PRESET_NOISE_CONDITIONS=nonoise`) to run only some of them.
 

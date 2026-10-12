@@ -1,0 +1,20 @@
+Build upstream LoopAlgorithm in Swift 5 language mode on Linux.
+
+PrecomputedInsulinInput (#29) parallelizes with DispatchQueue.concurrentPerform,
+relying on Darwin declaring its closure non-@Sendable. swift-corelibs-libdispatch
+declares it @Sendable, so Swift 6 strict concurrency rejects the build on Linux
+(Swift 6.0 and 6.1.2). Each iteration writes a distinct index, so the code is
+safe; Swift 5 mode only relaxes the compile-time check. Upstream tests: 140/140
+pass on Linux with this patch.
+
+diff --git a/Package.swift b/Package.swift
+index 92287f9..d0e4a2d 100644
+--- a/Package.swift
++++ b/Package.swift
+@@ -36,5 +36,5 @@ let package = Package(
+             ]
+         )
+     ],
+-    swiftLanguageModes: [.v6]
++    swiftLanguageModes: [.v5]
+ )

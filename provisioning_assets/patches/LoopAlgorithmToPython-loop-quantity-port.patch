@@ -1,0 +1,131 @@
+Port LoopAlgorithmToPython to the HealthKit-free LoopAlgorithm API.
+
+Upstream LoopAlgorithm removed its HealthKit dependency; HKQuantity/HKUnit are
+replaced by LoopQuantity/LoopUnit. Units are mapped to LoopUnit cases directly
+rather than via LoopUnit(from:), which silently falls back to .gram for unknown
+strings. Also guards the NSException handler, which only exists on Darwin.
+
+diff --git a/Sources/LoopAlgorithmToPython/LoopAlgorithmToPython.swift b/Sources/LoopAlgorithmToPython/LoopAlgorithmToPython.swift
+index d36b6d0..f01e9fc 100644
+--- a/Sources/LoopAlgorithmToPython/LoopAlgorithmToPython.swift
++++ b/Sources/LoopAlgorithmToPython/LoopAlgorithmToPython.swift
+@@ -7,9 +7,9 @@
+ 
+ import Foundation
+ import LoopAlgorithm
+-import HealthKit
+ 
+ 
++#if canImport(ObjectiveC)
+ func handleException(exception: NSException) {
+     print("Uncaught exception: \(exception.description)")
+     print("Stack trace: \(exception.callStackSymbols.joined(separator: "\n"))")
+@@ -19,6 +19,13 @@ func handleException(exception: NSException) {
+ public func initializeExceptionHandler() {
+     NSSetUncaughtExceptionHandler(handleException)
+ }
++#else
++// NSException and uncaught-exception handlers are Objective-C runtime features
++// unavailable on Linux; keep the C symbol so the Python bridge can still call it.
++@_cdecl("initializeExceptionHandler")
++public func initializeExceptionHandler() {
++}
++#endif
+ 
+ func signalHandler(signal: Int32) {
+     print("Received signal: \(signal)")
+@@ -69,7 +76,7 @@ public func generatePrediction(jsonData: UnsafePointer<Int8>?) -> UnsafeMutableP
+         var predictedValues: [Double] = []
+                 
+         for val in prediction.glucose {
+-            predictedValues.append(val.quantity.doubleValue(for: HKUnit(from: "mg/dL")))
++            predictedValues.append(val.quantity.doubleValue(for: .milligramsPerDeciliter))
+         }
+         let pointer = UnsafeMutablePointer<Double>.allocate(capacity: predictedValues.count)
+         pointer.initialize(from: predictedValues, count: predictedValues.count)
+@@ -133,7 +140,7 @@ public func getGlucoseEffectVelocity(jsonData: UnsafePointer<Int8>?) -> UnsafeMu
+         var glucoseEffectVelocities: [Double] = []
+                     
+         for val in prediction.effects.insulinCounteraction {
+-            glucoseEffectVelocities.append(val.quantity.doubleValue(for: HKUnit(from: "mg/dL·s")))
++            glucoseEffectVelocities.append(val.quantity.doubleValue(for: .milligramsPerDeciliterPerSecond))
+         }
+         let pointer = UnsafeMutablePointer<Double>.allocate(capacity: glucoseEffectVelocities.count)
+         pointer.initialize(from: glucoseEffectVelocities, count: glucoseEffectVelocities.count)
+@@ -150,7 +157,7 @@ struct PredictionEffectPoint: Encodable {
+ 
+     init(_ effect: GlucoseEffect) {
+         self.date = effect.startDate
+-        self.value = effect.quantity.doubleValue(for: HKUnit(from: "mg/dL"))
++        self.value = effect.quantity.doubleValue(for: .milligramsPerDeciliter)
+     }
+ }
+ 
+@@ -336,7 +343,7 @@ public func getDynamicCarbsOnBoard(jsonData: UnsafePointer<Int8>?) -> Double {
+         let startDate = dateFormatter.date(from: input.inputICE[0].startAt)!
+         let endDate = dateFormatter.date(from: input.inputICE.last!.startAt)!
+         let carbRatio = [AbsoluteScheduleValue(startDate: startDate, endDate: endDate, value: input.carbRatio)]
+-        let isf =  [AbsoluteScheduleValue(startDate: startDate, endDate: endDate, value: HKQuantity(unit: HKUnit(from: "mg/dL"), doubleValue: input.sensitivity))]
++        let isf =  [AbsoluteScheduleValue(startDate: startDate, endDate: endDate, value: LoopQuantity(unit: .milligramsPerDeciliter, doubleValue: input.sensitivity))]
+ 
+         let statuses = [carbEntries[0]].map(
+             to: inputICE,
+@@ -415,7 +422,7 @@ private func loadICEInputFixture(from inputs: [InputICE]) -> [GlucoseEffectVeloc
+     let dateFormatter = ISO8601DateFormatter()
+     dateFormatter.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime, .withDashSeparatorInDate]
+     
+-    let unit = HKUnit(from: "mg/dL").unitDivided(by: .minute())
++    let unit = LoopUnit.milligramsPerDeciliterPerMinute
+ 
+     return inputs.compactMap {
+         guard let startDate = dateFormatter.date(from: $0.startAt),
+@@ -423,7 +430,7 @@ private func loadICEInputFixture(from inputs: [InputICE]) -> [GlucoseEffectVeloc
+             return nil
+         }
+ 
+-        let quantity = HKQuantity(unit: unit, doubleValue: $0.velocity)
++        let quantity = LoopQuantity(unit: unit, doubleValue: $0.velocity)
+         return GlucoseEffectVelocity(
+             startDate: startDate,
+             endDate: endDate,
+@@ -457,7 +464,7 @@ private func carbEntriesFromFixture(_ fixture: [JSONDictionary]) -> [FixtureCarb
+         return FixtureCarbEntry(
+             absorptionTime: absorptionTime,
+             startDate: startAt,
+-            quantity: HKQuantity(unit: .gram(), doubleValue: $0["grams"] as! Double), foodType: nil
++            quantity: LoopQuantity(unit: .gram, doubleValue: $0["grams"] as! Double), foodType: nil
+         )
+     }
+ }
+@@ -465,11 +472,11 @@ private func carbEntriesFromFixture(_ fixture: [JSONDictionary]) -> [FixtureCarb
+ public struct FixtureCarbEntry: CarbEntry {
+     public var absorptionTime: TimeInterval?
+     public var startDate: Date
+-    public var quantity: HKQuantity
++    public var quantity: LoopQuantity
+     public var foodType: String?
+ 
+     // Explicit initializer
+-    public init(absorptionTime: TimeInterval?, startDate: Date, quantity: HKQuantity, foodType: String?) {
++    public init(absorptionTime: TimeInterval?, startDate: Date, quantity: LoopQuantity, foodType: String?) {
+         self.absorptionTime = absorptionTime
+         self.startDate = startDate
+         self.quantity = quantity
+@@ -484,7 +491,7 @@ extension FixtureCarbEntry: Codable {
+         self.init(
+             absorptionTime: try container.decodeIfPresent(TimeInterval.self, forKey: .absorptionTime),
+             startDate: try container.decode(Date.self, forKey: .date),
+-            quantity: HKQuantity(unit: .gram(), doubleValue: try container.decode(Double.self, forKey: .grams)),
++            quantity: LoopQuantity(unit: .gram, doubleValue: try container.decode(Double.self, forKey: .grams)),
+             foodType: try container.decodeIfPresent(String.self, forKey: .foodType)
+         )
+     }
+@@ -493,7 +500,7 @@ extension FixtureCarbEntry: Codable {
+         var container = encoder.container(keyedBy: CodingKeys.self)
+         try container.encodeIfPresent(absorptionTime, forKey: .absorptionTime)
+         try container.encode(startDate, forKey: .date)
+-        try container.encode(quantity.doubleValue(for: .gram()), forKey: .grams)
++        try container.encode(quantity.doubleValue(for: .gram), forKey: .grams)
+         try container.encodeIfPresent(foodType, forKey: .foodType)
+     }
+ 

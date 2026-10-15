@@ -23,6 +23,7 @@ PROVISIONING_ASSETS_DIR="${REPRO_ROOT}/provisioning_assets"
 SIMULATOR_LIBRARY_OVERRIDE_DIR="${PROVISIONING_ASSETS_DIR}/library_overrides/data-science-simulator/tidepool_data_science_simulator"
 CONDA_LIBRARY_OVERRIDE_DIR="${PROVISIONING_ASSETS_DIR}/library_overrides/tidepool-data-science-models/tidepool_data_science_models"
 PRESET_PROJECT_ASSETS_DIR="${PROVISIONING_ASSETS_DIR}/preset_validation/project"
+PRESET_INTERVENTION_PROJECT_ASSETS_DIR="${PROVISIONING_ASSETS_DIR}/preset_intervention_comparison/project"
 PATCHES_DIR="${PROVISIONING_ASSETS_DIR}/patches"
 
 CREATE_CONDA_ENV=1
@@ -598,6 +599,16 @@ copy_preset_project_assets() {
   copy_asset_file "${PRESET_PROJECT_ASSETS_DIR}/param_values.py" "${presets_dir}/param_values.py"
 }
 
+copy_preset_intervention_project_assets() {
+  local simulator_dir project_dir
+  simulator_dir="$1"
+  project_dir="${simulator_dir}/tidepool_data_science_simulator/projects/preset_intervention_comparison"
+
+  log "Copying preset intervention comparison project assets"
+  mkdir -p "${project_dir}"
+  copy_asset_file "${PRESET_INTERVENTION_PROJECT_ASSETS_DIR}/preset_intervention_comparison.py" "${project_dir}/preset_intervention_comparison.py"
+}
+
 apply_patch_once() {
   local repo_dir patch_file
   repo_dir="$1"
@@ -841,6 +852,7 @@ main() {
   patch_simulator_setup_for_editable_install "${simulator_dir}"
   replace_simulator_library_scripts "${simulator_dir}"
   copy_preset_project_assets "${simulator_dir}"
+  copy_preset_intervention_project_assets "${simulator_dir}"
 
   if [ "${BUILD_SWIFT_BRIDGE}" = "1" ]; then
     build_swift_bridge "${bridge_dir}" "${loop_algorithm_dir}"

@@ -34,7 +34,7 @@ from tidepool_data_science_simulator.models.measures import Bolus, PhysicalActiv
 logging.getLogger().setLevel(logging.ERROR)
 
 RANDOM_SEED = 42
-PUMP_NOISE_FRACTION = 0.25
+PUMP_NOISE_FRACTION = float(os.environ.get('PRESET_PUMP_NOISE_FRACTION') or 0.25)
 PRESET_EPSILON = 0.00000001
 NO_PRESET = 1.0
 NOISE_CONDITIONS = ['nonoise', 'samplenoise', 'fullnoise']

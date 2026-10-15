@@ -77,7 +77,9 @@ class SwiftLoopController(LoopController):
         settings_dictionary = self.controller_config.controller_settings
 
         data['predictionStart'] = t_now.strftime(format=format_string)
-        data['recommendationInsulinType'] = 'novolog'
+        # Also tagged on every dose below, so dose sizing and IOB/forecast use the same insulin curve
+        insulin_type = settings_dictionary.get('insulin_type') or 'novolog'
+        data['recommendationInsulinType'] = insulin_type
         data['maxBasalRate'] = settings_dictionary['max_basal_rate']
         data['maxBolus'] = settings_dictionary['max_bolus']
         data['suspendThreshold'] = settings_dictionary['suspend_threshold']
@@ -88,6 +90,13 @@ class SwiftLoopController(LoopController):
             data['recommendationType'] = 'automaticBolus' 
         else:
             data['recommendationType'] = 'tempBasal'
+
+        emulation = settings_dictionary.get('emulation')
+        if emulation:
+            data['emulation'] = emulation
+            if emulation == 'loop-1.0':
+                # Tidepool Loop 1.0 dosed by temp basal only
+                data['recommendationType'] = 'tempBasal'
 
         # BASAL RATE
         data_entries = []
@@ -187,7 +196,8 @@ class SwiftLoopController(LoopController):
                 'startDate' : dose_start_time.strftime(format=format_string),  
                 'endDate' : dose_end_time.strftime(format=format_string),  
                 'volume' : value,
-                'type' : dose_type
+                'type' : dose_type,
+                'insulinType' : insulin_type
             }
 
             history.append(entry)

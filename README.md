@@ -26,7 +26,7 @@ Upgrading from an older provisioned workspace: the existing `workspace/LoopAlgor
 
 ## Local Provisioning Assets
 
-Local simulator patches, conda package overrides, and preset validation inputs live under `provisioning_assets/`. The provisioner copies those assets into the workspace after checking out the pinned upstream repositories.
+Local simulator patches, conda package overrides, and the preset validation and preset intervention comparison projects live under `provisioning_assets/` (see [provisioning_assets/README.md](provisioning_assets/README.md)). The provisioner copies those assets into the workspace after checking out the pinned upstream repositories.
 
 The preset validation project is installed to:
 
@@ -68,6 +68,40 @@ To compare generated no-noise outputs against the local reference zip:
 ./scripts/compare_preset_reference.py --results-dir workspace/data-science-simulator/tidepool_data_science_simulator/projects/presets/t1dexi_preset_validation
 ```
 
+## Preset Intervention Comparison
+
+The pinned `LoopAlgorithm` includes `AlgorithmEmulationOptions`, which reproduces deployed Tidepool Loop 1.0 behavior. The preset intervention comparison uses it to run a paired comparison of two activity interventions over the same grid as the preset validation:
+
+| Arm | Preset | Raised target `(150, 170)` | Algorithm |
+| --- | --- | --- | --- |
+| `loop_2_0_preset` | yes | yes | current LoopAlgorithm |
+| `loop_1_0_workout` | no | yes | `loop-1.0` emulation (temp basal only) |
+
+Each arm runs under two controller insulin options:
+
+| Insulin option | `loop_2_0_preset` | `loop_1_0_workout` |
+| --- | --- | --- |
+| `RapidActingInsulin` | `rapidActingAdult` for all VPs | `rapidActingAdult` for adults, `rapidActingChild` for pediatric VPs |
+| `UltraRapidActingInsulin` | `fiasp` for all VPs | `fiasp` for all VPs |
+
+The preset validation script does not use emulation or insulin options. Its controller uses the default insulin type (`novolog`, which LoopAlgorithm runs on the `rapidActingAdult` model).
+
+The comparison is installed to:
+
+```text
+workspace/data-science-simulator/tidepool_data_science_simulator/projects/preset_intervention_comparison/
+```
+
+It imports the simulation builder from the sibling `projects/presets/` directory, so it only runs from the provisioned workspace. It reads the same `PRESET_*` grid and noise variables as the validation script. `PRESET_ARMS` and `PRESET_INSULIN_OPTIONS` take comma-separated subsets:
+
+```bash
+cd workspace/data-science-simulator/tidepool_data_science_simulator/projects/preset_intervention_comparison
+PRESET_NOISE_CONDITIONS=nonoise PRESET_INSULIN_OPTIONS=RapidActingInsulin \
+  conda run -n tidepool-data-science-simulator-swift python preset_intervention_comparison.py
+```
+
+Results are written to `<PRESET_SAVE_ROOT>/<insulin option>/<arm>_<noise condition>/<activity>_<glucose>_<iob>_<duration>_<vp>.tsv`, with `./preset_intervention_comparison` as the default save root. Pump settings noise is seeded from the grid point only, so a file name shared across arm folders marks a matched pair with identical pump basal, CIR, and ISF.
+
 ## Linux Notes
 
 `LoopAlgorithm` requires Swift 6. If a Swift 6 toolchain is not already installed, the script installs Swift `6.0.3` locally under `workspace/.toolchains/` on Ubuntu 20.04 or 22.04 x86_64. On Linux, `LoopAlgorithm` is built in Swift 5 language mode (see `LoopAlgorithm-linux-swift5-language-mode.patch`) because its `DispatchQueue.concurrentPerform` code only passes Swift 6 strict concurrency checks against Darwin's Dispatch. If the Swift build reports missing OS libraries, rerun with:
@@ -87,8 +121,13 @@ On Linux, SwiftPM produces `libLoopAlgorithmToPython.so`; the script also create
 ./scripts/provision.sh --recreate-conda
 ./scripts/provision.sh --run-tests
 ./scripts/provision.sh --skip-swift-build
+./scripts/provision.sh --skip-swift-install
 ./scripts/provision.sh --skip-conda
+./scripts/provision.sh --no-smoke-test
+CONDA_ENV_NAME=my-sim-env ./scripts/provision.sh
 ```
+
+Run `./scripts/provision.sh --help` for the full list of options and environment overrides.
 
 The script uses `conda` by default and passes `--solver libmamba` to `conda env create/update`. If your conda install does not yet include the official libmamba solver, install it into base first:
 

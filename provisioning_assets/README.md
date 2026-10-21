@@ -1,6 +1,6 @@
 # Provisioning Assets
 
-This directory contains the local files that are layered on top of the pinned upstream repositories during provisioning.
+This directory contains the local files that are layered on top of the pinned upstream repositories during provisioning. [OVERRIDES.md](OVERRIDES.md) describes how each override and provisioning edit differs from upstream.
 
 ## Layout
 

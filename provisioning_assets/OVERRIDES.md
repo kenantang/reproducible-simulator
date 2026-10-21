@@ -49,8 +49,8 @@ This override only adds code; nothing upstream is modified.
 
 | Change | Location |
 | --- | --- |
-| New class `AielloPAModel`. Takes `isf`, `cir`, `w_hr`, `w_egp`, and optional `a` (default `-0.002462`), `n` (default `28` min) and `tau` (default `0.9989`). | [L302](library_overrides/tidepool-data-science-models/tidepool_data_science_models/models/treatment_models.py#L302) |
-| `run(num_hours, hr_amount)` computes a glucose drop proportional to heart rate above 72 bpm. It starts after a delay of `n` and decays by a factor of `tau` per 10-second step. | [L322–L373](library_overrides/tidepool-data-science-models/tidepool_data_science_models/models/treatment_models.py#L322-L373) |
+| New class `AielloPAModel`. Takes `isf`, `cir`, `w_hr`, `w_egp`, and optional `a` (default `-0.002462`), `n` (default `28`) and `tau` (default `0.9989`). | [L302](library_overrides/tidepool-data-science-models/tidepool_data_science_models/models/treatment_models.py#L302) |
+| `run(num_hours, hr_amount)` computes a glucose drop proportional to heart rate above 72 bpm. It starts after a delay of `n` 10-second steps and decays by a factor of `tau`. | [L322–L373](library_overrides/tidepool-data-science-models/tidepool_data_science_models/models/treatment_models.py#L322-L373) |
 | The glucose drop is scaled by `w_hr`. | [L365](library_overrides/tidepool-data-science-models/tidepool_data_science_models/models/treatment_models.py#L365) |
 | Adds a one-time endogenous glucose production term at t=0, scaled by `w_egp`. | [L368–L371](library_overrides/tidepool-data-science-models/tidepool_data_science_models/models/treatment_models.py#L368-L371) |
 
